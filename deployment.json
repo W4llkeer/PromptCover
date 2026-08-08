@@ -1,0 +1,11 @@
+{
+    "network":  "studionet",
+    "chainId":  61999,
+    "contractAddress":  "0x04B175A8a34fb089A943D9bd41f667530AB1905e",
+    "explorerBaseUrl":  "https://explorer-studio.genlayer.com",
+    "status":  "smoke_verified",
+    "sourceHash":  "5a1518583c59b33f07a8f15dddcd700fe1c5e73fd0c5122504be4c4eca57c7a4",
+    "methodCount":  12,
+    "rpcUrl":  "https://studio.genlayer.com/api",
+    "smokeRecordId":  "mutual-balance-sheet"
+}
