@@ -1,6 +1,6 @@
 export type FieldType = "str" | "u256" | "bool";
 export type FieldSpec = { name: string; label: string; type: FieldType };
-export type WriteAction = { name: string; label: string; description: string; fields: readonly FieldSpec[] };
+export type WriteAction = { name: string; label: string; description: string; fields: readonly FieldSpec[]; payableValueField?: string };
 export type ReadAction = { name: string; label: string; fields: readonly FieldSpec[] };
 
 export const appSpec = {
@@ -51,6 +51,15 @@ export const appSpec = {
 
 export const writeActions = [
   {
+    "name": "register_evidence_authority",
+    "label": "Register evidence authority",
+    "description": "Manager-register the authoritative incident evidence host.",
+    "fields": [
+      { "name": "authority_id", "label": "Authority ID", "type": "str" },
+      { "name": "allowed_host", "label": "Allowed HTTPS host", "type": "str" }
+    ]
+  },
+  {
     "name": "capitalize_prompt_mutual",
     "label": "Capitalize mutual",
     "description": "Launch the security mutual with sponsor capital.",
@@ -70,7 +79,8 @@ export const writeActions = [
         "label": "Sponsor units",
         "type": "u256"
       }
-    ]
+    ],
+    "payableValueField": "sponsor_units"
   },
   {
     "name": "pledge_underwriter_tranche",
@@ -92,7 +102,8 @@ export const writeActions = [
         "label": "Loss rank",
         "type": "u256"
       }
-    ]
+    ],
+    "payableValueField": "units"
   },
   {
     "name": "bind_agent_policy",
@@ -129,7 +140,7 @@ export const writeActions = [
   {
     "name": "fund_policy_premium",
     "label": "Fund premium",
-    "description": "Record the policy premium payment.",
+    "description": "Deposit the policy premium as real GEN value.",
     "fields": [
       {
         "name": "policy_id",
@@ -141,7 +152,8 @@ export const writeActions = [
         "label": "Paid units",
         "type": "u256"
       }
-    ]
+    ],
+    "payableValueField": "paid_units"
   },
   {
     "name": "report_injection_loss",
@@ -164,8 +176,13 @@ export const writeActions = [
         "type": "str"
       },
       {
-        "name": "trace_root",
-        "label": "Trace root",
+        "name": "evidence_authority",
+        "label": "Evidence authority ID",
+        "type": "str"
+      },
+      {
+        "name": "evidence_sha256",
+        "label": "Incident SHA-256",
         "type": "str"
       },
       {
@@ -218,8 +235,8 @@ export const writeActions = [
   },
   {
     "name": "credit_claimant_account",
-    "label": "Credit claimant",
-    "description": "Record the final claimant credit.",
+    "label": "Pay claimant",
+    "description": "Transfer the reserved GEN payout before clearing accounting.",
     "fields": [
       {
         "name": "claim_id",

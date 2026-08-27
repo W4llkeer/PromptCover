@@ -28,7 +28,7 @@ export function useLiveWrite() {
   const { switchChainAsync } = useSwitchChain();
   const queryClient = useQueryClient();
 
-  const write = useCallback(async (functionName: string, args: unknown[]) => {
+  const write = useCallback(async (functionName: string, args: unknown[], value: bigint = BigInt(0)) => {
     if (!contractAddress) throw new Error("The verified contract address is unavailable.");
     if (!address || !walletClient) throw new Error("Connect a wallet before signing.");
     try {
@@ -37,7 +37,7 @@ export function useLiveWrite() {
         walletClient.request({ method: method as never, params: params as never }) };
       const client = createClient({ chain: studionet, account: address, provider: provider as never });
       setStatus({ stage: "wallet" });
-      const hash = await client.writeContract({ address: contractAddress, functionName, args: args as never[], value: BigInt(0) });
+      const hash = await client.writeContract({ address: contractAddress, functionName, args: args as never[], value });
       setStatus({ stage: "finalizing", hash });
       const receipt = await readClient.waitForTransactionReceipt({ hash, status: TransactionStatus.FINALIZED, interval: 3000, retries: 200 });
       const result = receipt.resultName ?? (receipt as unknown as { result_name?: string }).result_name;

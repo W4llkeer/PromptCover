@@ -1,4 +1,5 @@
 export const domainMethods = [
+  "register_evidence_authority",
   "capitalize_prompt_mutual",
   "pledge_underwriter_tranche",
   "bind_agent_policy",

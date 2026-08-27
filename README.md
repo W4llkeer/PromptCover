@@ -1,16 +1,20 @@
 # PromptCover
 
-PromptCover is a capitalized mutual that turns prompt-injection losses into traceable policy exposure, reserves, and claimant credits.
+PromptCover is a capitalized mutual that turns authenticated prompt-injection losses into enforceable GEN reserves and claimant payouts.
+
+Live app: https://w4llkeer.github.io/PromptCover/
 
 ## Mutual balance sheet
 
-The sponsor initializes capital and a leverage ceiling. Underwriters add named tranches; policy binding increases exposure, while funded premiums become mutual assets. These entries remain visible in the balance sheet instead of being hidden behind a generic coverage verdict.
+Sponsor capital, underwriting tranches, and premiums are payable writes. Each declared amount must exactly match the attached GEN value, so the balance sheet tracks assets actually held by the contract.
 
 ## Loss account
 
-A policy holder reports an agent loss and appends ordered countertrace evidence. GenLayer classifies cause, severity, coverage, and payout basis points. The contract then computes the reserve against the policy limit and available assets before moving reserved units into the claimant's credited account.
+A manager first registers an evidence authority and its allowed HTTPS host. A policy holder then submits the authority ID, source URL, and exact SHA-256. Validators fetch the source, verify the digest and host binding, and agree on cause, severity, coverage, and the deterministic severity payout tier. Reused evidence, concurrent claims, claims above the remaining limit, and more than three claims per policy are rejected.
 
-The mutual exposes **12 public methods: 9 writes and 3 reads**. Capitalization, underwriting, policy binding, premium funding, loss reporting, countertraces, classification, reservation, and crediting are separate writes; balance-sheet, policy, and loss-account views keep the accounting inspectable.
+An approved reserve remains part of contract custody until `credit_claimant_account` transfers the GEN to the claimant. Accounting and claim state change only after the transfer call succeeds; the final state is `PAID` and the receipt records `transfer_completed: true`.
+
+The mutual exposes **13 public methods: 10 writes and 3 reads**, including the repository-visible evidence-authority registration path.
 
 ## Vault runway
 
@@ -18,7 +22,7 @@ The VaultShield landing at `/` and the operational mutual at `/app` share the sa
 
 ## Capital proof
 
-Studionet smoke verification capitalized the deployed mutual and read back `CAPITALIZED` for `mutual-balance-sheet`. Source and direct tests check the twelve-method surface, leverage and reserve guards, source hash, wallet isolation, finalized consensus, and the absence of credential material.
+The StudioNet validation flow covers authority registration, payable capitalization, payable tranche funding, policy binding, payable premium intake, claim submission, countertrace, validator classification, reserve, and payout. Transaction-level evidence is kept outside the public repository.
 
 Run the vault suite:
 
@@ -26,18 +30,13 @@ Run the vault suite:
 npm install
 npm run typecheck
 npm test
-npm run test:studionet
 npm run build
 npm run dev
 ```
 
-Local entrance: `http://localhost:4417/`.
-
 ## Policy seal
 
-- GenLayer Studionet contract: `0x04B175A8a34fb089A943D9bd41f667530AB1905e`
-- Dedicated mutual wallet: `0x50f11bBFa5c1aA0855D53AC09eba1A26cbC66559`
-- Deployment transaction: `0x9636a54f8c89de03ee39be2e0bf0e19302d054a428caf7e927157a8ccf554097`
-- Source SHA-256: `5a1518583c59b33f07a8f15dddcd700fe1c5e73fd0c5122504be4c4eca57c7a4`
+- GenLayer Studionet contract: `0xa01599559B1E3a0498205706197624D110E06407`
+- Source SHA-256: `76e106cf7c20a787d07dd3537fab2a1cfef6eb6c3013594a54855b0e738fc0b6`
 - Chain ID: `61999`
-- Deployment manifest: `smoke_verified`
+- Deployment status: verified on StudioNet

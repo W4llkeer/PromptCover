@@ -8,7 +8,8 @@
                     "start":  "next start -p 4417",
                     "typecheck":  "tsc --noEmit",
                     "test":  "node --test tests/source.test.mjs",
-                    "test:studionet":  "node --test tests/studionet.test.mjs"
+                    "test:studionet":  "node --test tests/studionet.test.mjs",
+                    "smoke:studionet":  "node scripts/studionet-smoke.mjs"
                 },
     "dependencies":  {
                          "@rainbow-me/rainbowkit":  "2.2.8",

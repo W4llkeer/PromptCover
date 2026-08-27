@@ -2,7 +2,20 @@
 
 from genlayer import *
 from dataclasses import dataclass
+import hashlib
 import json
+
+
+@gl.evm.contract_interface
+class _Payee:
+    class View:
+        pass
+
+    class Write:
+        pass
+
+
+MAX_CLAIMS_PER_POLICY = 3
 
 
 @allow_storage
@@ -18,6 +31,14 @@ class MutualBalance:
     credited_claims: u256
     active_exposure: u256
     launched: bool
+
+
+@allow_storage
+@dataclass
+class EvidenceAuthority:
+    authority_id: str
+    allowed_host: str
+    active: bool
 
 
 @allow_storage
@@ -40,6 +61,9 @@ class AgentPolicy:
     premium_units: u256
     state: str
     claim_count: u256
+    open_claims: u256
+    paid_claims: u256
+    paid_units: u256
 
 
 @allow_storage
@@ -49,7 +73,9 @@ class InjectionClaim:
     policy_id: str
     claimant: str
     incident_url: str
-    trace_root: str
+    evidence_authority: str
+    evidence_sha256: str
+    evidence_verified: bool
     claimed_loss_units: u256
     state: str
     countertrace_count: u256
@@ -73,6 +99,8 @@ class PromptCover(gl.Contract):
     countertraces: TreeMap[str, str]
     claim_reports: TreeMap[str, str]
     credit_receipts: TreeMap[str, str]
+    evidence_authorities: TreeMap[str, EvidenceAuthority]
+    used_evidence: TreeMap[str, bool]
 
     def __init__(self):
         self.manager = gl.message.sender_address
@@ -92,6 +120,33 @@ class PromptCover(gl.Contract):
     def _actor(self) -> str:
         return str(gl.message.sender_address)
 
+    def _attached_units(self) -> int:
+        return int(gl.message.value)
+
+    def _transfer_units(self, recipient: str, amount: int) -> None:
+        if amount <= 0:
+            raise gl.vm.UserError("Payout amount must be positive")
+        _Payee(Address(recipient)).emit_transfer(value=u256(amount))
+
+    def _host(self, url: str) -> str:
+        if not url.startswith("https://"):
+            raise gl.vm.UserError("Evidence URL must use HTTPS")
+        host = url[8:].split("/", 1)[0].strip().lower()
+        if host == "":
+            raise gl.vm.UserError("Evidence URL host is missing")
+        return host
+
+    def _sha256_text(self, text: str) -> str:
+        return hashlib.sha256(text.encode("utf-8", "ignore")).hexdigest()
+
+    def _is_digest(self, value: str) -> bool:
+        if len(value) != 64:
+            return False
+        for char in value:
+            if char not in "0123456789abcdef":
+                return False
+        return True
+
     def _policy(self, policy_id: str) -> AgentPolicy:
         key = policy_id.strip().lower()
         if key == "" or key not in self.policies:
@@ -105,11 +160,24 @@ class PromptCover(gl.Contract):
         return self.claims[key]
 
     def _claim_prompt(
-        self, policy: AgentPolicy, claim: InjectionClaim, countertraces: list
+        self,
+        policy: AgentPolicy,
+        claim: InjectionClaim,
+        countertraces: list,
+        terms_url: str,
+        authority_host: str,
     ) -> str:
-        terms = gl.nondet.web.render(self.balance.terms_url, mode="text")[:10000]
+        terms = gl.nondet.web.render(terms_url, mode="text")[:10000]
         profile = gl.nondet.web.render(policy.security_profile_url, mode="text")[:8000]
-        incident = gl.nondet.web.render(claim.incident_url, mode="text")[:12000]
+        response = gl.nondet.web.get(claim.incident_url)
+        try:
+            incident = response.body.decode("utf-8", errors="replace")[:12000]
+        except Exception:
+            incident = str(getattr(response, "body", ""))[:12000]
+        if self._sha256_text(incident) != claim.evidence_sha256:
+            raise gl.vm.UserError("Authenticated incident evidence hash mismatch")
+        if self._host(claim.incident_url) != authority_host:
+            raise gl.vm.UserError("Incident evidence host is not authority-bound")
         counter_sources = []
         for row in countertraces:
             counter_sources.append(
@@ -128,8 +196,9 @@ and excluded conduct. The contract, not you, calculates reserve amounts.
 
 Mutual wording: {terms}
 Insured agent security profile: {profile}
+Incident evidence authority: {claim.evidence_authority}
+Verified incident SHA-256: {claim.evidence_sha256}
 Incident evidence: {incident}
-Trace root: {claim.trace_root}
 Claimed loss units: {int(claim.claimed_loss_units)}
 Countertraces: {json.dumps(counter_sources, sort_keys=True)}
 
@@ -164,11 +233,9 @@ Return JSON:
             cause = "OTHER"
         if severity not in severities:
             severity = "LOW"
-        try:
-            payout_bps = max(0, min(10000, int(raw.get("payout_bps", 0))))
-        except (TypeError, ValueError):
-            payout_bps = 0
         covered = bool(raw.get("covered", False))
+        payout_by_severity = {"LOW": 2500, "MEDIUM": 5000, "HIGH": 8000, "CRITICAL": 10000}
+        payout_bps = payout_by_severity.get(severity, 0)
         if not covered or cause != "PROMPT_INJECTION":
             covered = False
             payout_bps = 0
@@ -182,6 +249,26 @@ Return JSON:
         }
 
     @gl.public.write
+    def register_evidence_authority(
+        self, authority_id: str, allowed_host: str
+    ) -> None:
+        if gl.message.sender_address != self.manager:
+            raise gl.vm.UserError("Only the manager may register evidence authorities")
+        key = authority_id.strip().lower()
+        host = allowed_host.strip().lower()
+        if len(key) < 3 or len(key) > 64:
+            raise gl.vm.UserError("Evidence authority ID is invalid")
+        if host.startswith("https://"):
+            host = self._host(host)
+        if host == "" or "/" in host or " " in host:
+            raise gl.vm.UserError("Evidence authority host is invalid")
+        self.evidence_authorities[key] = EvidenceAuthority(
+            authority_id=key,
+            allowed_host=host,
+            active=True,
+        )
+
+    @gl.public.write.payable
     def capitalize_prompt_mutual(
         self, mutual_name: str, terms_url: str, sponsor_units: u256
     ) -> None:
@@ -194,6 +281,8 @@ Return JSON:
             raise gl.vm.UserError("Mutual name must contain 5 to 120 characters")
         if not terms_url.startswith("https://") or int(sponsor_units) == 0:
             raise gl.vm.UserError("Terms URL and positive sponsor capital are required")
+        if self._attached_units() != int(sponsor_units):
+            raise gl.vm.UserError("Sponsor capital must equal attached GEN value")
         self.balance = MutualBalance(
             mutual_name=name,
             terms_url=terms_url,
@@ -207,7 +296,7 @@ Return JSON:
             launched=True,
         )
 
-    @gl.public.write
+    @gl.public.write.payable
     def pledge_underwriter_tranche(
         self, tranche_id: str, units: u256, loss_rank: u256
     ) -> None:
@@ -218,6 +307,8 @@ Return JSON:
             raise gl.vm.UserError("Tranche ID is invalid or already used")
         if int(units) == 0 or int(loss_rank) == 0 or int(loss_rank) > 100:
             raise gl.vm.UserError("Capital units and loss rank are outside policy")
+        if self._attached_units() != int(units):
+            raise gl.vm.UserError("Underwriter capital must equal attached GEN value")
         actor = self._actor()
         previous_rank = int(self.underwriter_rank.get(actor, u256(0)))
         if previous_rank != 0 and int(loss_rank) <= previous_rank:
@@ -267,16 +358,21 @@ Return JSON:
             premium_units=premium_units,
             state="PREMIUM_DUE",
             claim_count=u256(0),
+            open_claims=u256(0),
+            paid_claims=u256(0),
+            paid_units=u256(0),
         )
         self.policy_order.append(key)
 
-    @gl.public.write
+    @gl.public.write.payable
     def fund_policy_premium(self, policy_id: str, paid_units: u256) -> None:
         policy = self._policy(policy_id)
         if policy.holder != self._actor() or policy.state != "PREMIUM_DUE":
             raise gl.vm.UserError("Only the holder may fund a due premium")
         if paid_units != policy.premium_units:
             raise gl.vm.UserError("Premium funding must equal the bound amount")
+        if self._attached_units() != int(paid_units):
+            raise gl.vm.UserError("Premium units must equal attached GEN value")
         policy.state = "ACTIVE"
         self.policies[policy.policy_id] = policy
         self.balance.premium_income += paid_units
@@ -289,28 +385,45 @@ Return JSON:
         claim_id: str,
         policy_id: str,
         incident_url: str,
-        trace_root: str,
+        evidence_authority: str,
+        evidence_sha256: str,
         claimed_loss_units: u256,
     ) -> None:
         policy = self._policy(policy_id)
         key = claim_id.strip().lower()
-        trace = trace_root.strip()
+        authority_key = evidence_authority.strip().lower()
+        digest = evidence_sha256.strip().lower()
         if policy.holder != self._actor() or policy.state != "ACTIVE":
             raise gl.vm.UserError("Only an active policy holder may report a loss")
         if len(key) < 3 or len(key) > 64 or key in self.claims:
             raise gl.vm.UserError("Claim ID is invalid or already used")
-        if not incident_url.startswith("https://"):
-            raise gl.vm.UserError("Incident URL must use HTTPS")
-        if len(trace) < 8 or len(trace) > 180:
-            raise gl.vm.UserError("Trace root must contain 8 to 180 characters")
+        authority = self.evidence_authorities.get(authority_key)
+        if authority is None or not authority.active:
+            raise gl.vm.UserError("Incident evidence authority is not registered")
+        if self._host(incident_url) != authority.allowed_host:
+            raise gl.vm.UserError("Incident URL is not bound to the evidence authority")
+        if not self._is_digest(digest):
+            raise gl.vm.UserError("Incident evidence requires an exact SHA-256 digest")
+        evidence_key = authority_key + "::" + digest
+        if bool(self.used_evidence.get(evidence_key, False)):
+            raise gl.vm.UserError("Incident evidence was already used by another claim")
         if int(claimed_loss_units) == 0:
             raise gl.vm.UserError("Claimed loss units must be positive")
+        if int(policy.claim_count) >= MAX_CLAIMS_PER_POLICY:
+            raise gl.vm.UserError("Policy claim limit has been reached")
+        if int(policy.open_claims) > 0:
+            raise gl.vm.UserError("Policy already has an unresolved claim")
+        remaining_limit = int(policy.coverage_limit) - int(policy.paid_units)
+        if remaining_limit <= 0 or int(claimed_loss_units) > remaining_limit:
+            raise gl.vm.UserError("Claim exceeds the policy remaining payout limit")
         self.claims[key] = InjectionClaim(
             claim_id=key,
             policy_id=policy.policy_id,
             claimant=self._actor(),
             incident_url=incident_url,
-            trace_root=trace,
+            evidence_authority=authority_key,
+            evidence_sha256=digest,
+            evidence_verified=False,
             claimed_loss_units=claimed_loss_units,
             state="COUNTERTRACE_WINDOW",
             countertrace_count=u256(0),
@@ -321,7 +434,9 @@ Return JSON:
             reserved_units=u256(0),
         )
         self.claim_order.append(key)
+        self.used_evidence[evidence_key] = True
         policy.claim_count += u256(1)
+        policy.open_claims += u256(1)
         self.policies[policy.policy_id] = policy
 
     @gl.public.write
@@ -351,10 +466,15 @@ Return JSON:
             countertraces.append(
                 json.loads(self.countertraces[claim.claim_id + "::" + str(slot)])
             )
+        terms_url = self.balance.terms_url
+        authority = self.evidence_authorities.get(claim.evidence_authority)
+        if authority is None or not authority.active:
+            raise gl.vm.UserError("Incident evidence authority is not active")
+        authority_host = authority.allowed_host
 
         def produce():
             answer = gl.nondet.exec_prompt(
-                self._claim_prompt(policy, claim, countertraces),
+                self._claim_prompt(policy, claim, countertraces, terms_url, authority_host),
                 response_format="json",
             )
             return self._normalize_claim_result(answer)
@@ -378,11 +498,15 @@ Return JSON:
             )
 
         report = gl.vm.run_nondet_unsafe(produce, compare)
+        claim.evidence_verified = True
         claim.covered = bool(report["covered"])
         claim.cause_class = report["cause_class"]
         claim.severity = report["severity"]
         claim.payout_bps = u256(report["payout_bps"])
         claim.state = "RESERVE_READY" if claim.covered else "DECLINED"
+        if not claim.covered:
+            policy.open_claims -= u256(1)
+            self.policies[policy.policy_id] = policy
         self.claim_reports[claim.claim_id] = json.dumps(
             report, separators=(",", ":"), sort_keys=True
         )
@@ -395,7 +519,8 @@ Return JSON:
         if claim.state != "RESERVE_READY":
             raise gl.vm.UserError("Covered claim is not ready for reserving")
         covered_loss = min(
-            int(claim.claimed_loss_units), int(policy.coverage_limit)
+            int(claim.claimed_loss_units),
+            int(policy.coverage_limit) - int(policy.paid_units),
         )
         reserve = (covered_loss * int(claim.payout_bps)) // 10000
         if reserve == 0 or reserve > int(self.balance.available_assets):
@@ -411,15 +536,25 @@ Return JSON:
         claim = self._claim(claim_id)
         if claim.claimant != self._actor() or claim.state != "RESERVED":
             raise gl.vm.UserError("Only the claimant may draw a reserved claim")
-        claim.state = "CREDITED"
+        payout = int(claim.reserved_units)
+        self._transfer_units(claim.claimant, payout)
+        claim.state = "PAID"
         self.balance.reserved_claims -= claim.reserved_units
         self.balance.credited_claims += claim.reserved_units
+        policy = self._policy(claim.policy_id)
+        policy.open_claims -= u256(1)
+        policy.paid_claims += u256(1)
+        policy.paid_units += claim.reserved_units
+        if int(policy.paid_units) >= int(policy.coverage_limit):
+            policy.state = "EXHAUSTED"
+        self.policies[policy.policy_id] = policy
         self.credit_receipts[claim.claim_id] = json.dumps(
             {
                 "claim_id": claim.claim_id,
                 "policy_id": claim.policy_id,
                 "claimant": claim.claimant,
-                "credited_units": int(claim.reserved_units),
+                "paid_units": payout,
+                "transfer_completed": True,
             },
             separators=(",", ":"),
             sort_keys=True,
@@ -454,6 +589,10 @@ Return JSON:
             "premium_units": int(policy.premium_units),
             "state": policy.state,
             "claim_count": int(policy.claim_count),
+            "open_claims": int(policy.open_claims),
+            "paid_claims": int(policy.paid_claims),
+            "paid_units": int(policy.paid_units),
+            "remaining_limit": max(0, int(policy.coverage_limit) - int(policy.paid_units)),
         }
 
     @gl.public.view
@@ -464,6 +603,9 @@ Return JSON:
             "policy_id": claim.policy_id,
             "claimant": claim.claimant,
             "state": claim.state,
+            "evidence_authority": claim.evidence_authority,
+            "evidence_sha256": claim.evidence_sha256,
+            "evidence_verified": claim.evidence_verified,
             "claimed_loss_units": int(claim.claimed_loss_units),
             "covered": claim.covered,
             "cause_class": claim.cause_class,

@@ -4,6 +4,10 @@ export const contractSurface = {
   reference: "VaultShield security system",
   methods: [
   {
+    "name": "register_evidence_authority",
+    "readonly": false
+  },
+  {
     "name": "capitalize_prompt_mutual",
     "readonly": false
   },

@@ -11,15 +11,14 @@ const experience = read("src/components/vault-experience.tsx");
 const landing = read("src/components/promptcover-landing.tsx");
 const live = read("src/lib/live-contract.ts");
 const spec = read("src/lib/domain-spec.ts");
-const deployment = JSON.parse(read("deployment.json"));
+const deploymentSource = read("src/lib/deployment.ts");
 
 test("the V2 contract surface is fully represented", () => {
-  const publicNames = [...contract.matchAll(/@gl\.public\.(?:write|view)\n\s+def ([a-z0-9_]+)\(/g)].map((match) => match[1]);
-  assert.equal(publicNames.length, 12);
+  const publicNames = [...contract.matchAll(/@gl\.public\.(?:write(?:\.payable)?|view)\s+def ([a-z0-9_]+)\(/g)].map((match) => match[1]);
+  assert.equal(publicNames.length, 13);
   for (const name of publicNames) assert.match(spec, new RegExp(`["']${name}["']`));
-  assert.ok(["deployed_verified_v2", "smoke_verified"].includes(deployment.status));
-  assert.equal(deployment.sourceHash, "5a1518583c59b33f07a8f15dddcd700fe1c5e73fd0c5122504be4c4eca57c7a4");
-  assert.match(deployment.contractAddress, /^0x[0-9a-fA-F]{40}$/);
+  assert.match(deploymentSource, /currentContractSourceHash = "76e106cf7c20a787d07dd3537fab2a1cfef6eb6c3013594a54855b0e738fc0b6"/);
+  assert.match(deploymentSource, /contractAddress = "0x[a-fA-F0-9]{40}"/);
 });
 
 test("the app is one complete English route", () => {

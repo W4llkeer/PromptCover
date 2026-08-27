@@ -29,7 +29,14 @@ export function useDomainRuntime() {
 
   async function submitWrite(event: React.FormEvent) {
     event.preventDefault();
-    await writer.write(writeAction.name, writeAction.fields.map((field) => castField(field, writeValues[field.name] ?? "")));
+    const payableValue = writeAction.payableValueField
+      ? BigInt(writeValues[writeAction.payableValueField] || "0")
+      : BigInt(0);
+    await writer.write(
+      writeAction.name,
+      writeAction.fields.map((field) => castField(field, writeValues[field.name] ?? "")),
+      payableValue,
+    );
     setWriteValues({});
   }
 
